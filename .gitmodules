@@ -1,0 +1,6 @@
+[submodule "nmnlp"]
+	path = nmnlp
+	url = https://github.com/izhx/nmnlp.git
+[submodule "UniversalPropositions"]
+	path = UniversalPropositions
+	url = https://github.com/System-T/UniversalPropositions.git

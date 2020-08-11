@@ -1,0 +1,30 @@
+data:
+  data_dir: ./UniversalPropositions/
+  lang: en
+model:
+  dropout: 0.5
+  encoder:
+    hidden_size: 400
+    name: bilstm
+    num_layers: 3
+  parser:
+    embedding_dim: 50
+    action_stack_dim: 60
+  word_embedding:
+    layer_num: 12
+    name_or_path: /home/xps/workspace/model_weight/bert-base-uncased/
+    scalar_mix:
+      do_layer_norm: true
+optim:
+  lr: 0.001
+  name: Adam
+trainer:
+  batch_size: 64
+  early_stop: true
+  epoch_num: 200
+  save_after: 0
+  save_dir: ./dev/model/
+  save_strategy: no
+vocab:
+  min_count:
+    words: 1
