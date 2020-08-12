@@ -4,10 +4,11 @@ Transition-based。
 
 from enum import Enum, unique
 from typing import Tuple, List, Dict, Any, Iterable
+from collections import defaultdict
 
 import torch
 from torch import Tensor
-from torch.nn import Module, LSTMCell, Parameter, Dropout, Embedding, Linear
+from torch.nn import Module, LSTMCell, Parameter, ParameterList, Dropout, Embedding, Linear
 from torch.nn.modules.activation import Softmax, Tanh
 from torch.nn.functional import log_softmax
 
@@ -17,18 +18,18 @@ from nmnlp.modules.linear import NonLinear
 @unique
 class Action(Enum):
     PRED_GEN: int = 2
-    NO_PRED: int = 3
+    NO_PRED: int = 1
 
-    LEFT_ARC: int = 4
-    RIGHT_ARC: int = 5
-    NO_LEFT_ARC: int = 6
-    NO_RIGHT_ARC: int = 7
+    LEFT_ARC: int = 3
+    RIGHT_ARC: int = 4
+    NO_LEFT_ARC: int = 5
+    NO_RIGHT_ARC: int = 6
 
-    SHIFT: int = 1
-    O_DELETE: int = 0  # 暂时没用上
+    SHIFT: int = 0
+#    O_DELETE: int = 7  # 暂时没用上
 
 
-class ActionHelper(object):
+class ActionHelper(Module):
     """
     完成一些Enum缺少的功能。
     """
@@ -45,6 +46,7 @@ class ActionHelper(object):
     }
 
     def __init__(self):
+        super().__init__()
         directional_actions = [
             Action.LEFT_ARC, Action.NO_LEFT_ARC, Action.RIGHT_ARC,
             Action.NO_RIGHT_ARC
@@ -68,17 +70,27 @@ class ActionHelper(object):
         # 3. 左右皆空
         self.valid_actions[(True, True)] = [Action.SHIFT]
 
+        self.masks = ParameterList()
+        self.key_to_id = dict()
+        for k, v in self.valid_actions.items():
+            values = set(a.value for a in v)
+            self.key_to_id[k] = len(self.masks)
+            self.masks.append(Parameter(torch.tensor(
+                [1 if i in values else 0 for i in range(len(Action))]
+            ), requires_grad=False))
+
     def get_valid_actions(self,
                           action: Action = None,
                           empty_left: bool = True,
-                          empty_right: bool = True) -> List[int]:
+                          empty_right: bool = True) -> Tuple[List[Action], Tensor]:
         """
         Return valid actions list by previous action.
         """
         if action in self.valid_actions:
-            return self.valid_actions[action]
+            return self.valid_actions[action], self.masks[self.key_to_id[action]]
         else:
-            return self.valid_actions[(empty_left, empty_right)]
+            key = (empty_left, empty_right)
+            return self.valid_actions[key], self.masks[self.key_to_id[key]]
 
     @staticmethod
     def make_oracle(length: int, relations: Dict[int, Dict[int, str]]) -> List[Action]:
@@ -397,7 +409,7 @@ class ShiftReduce(Module):
         """
         一次一句。hidden_states 要符合序列实际长度，去掉padding。
         """
-        loss_action, loss_label, prediction, actions = list(), list(), dict(), list()
+        loss_action, loss_label, prediction, actions = list(), list(), defaultdict(dict), list()
         distributions_head = []
         distributions_role = []
 
@@ -409,7 +421,7 @@ class ShiftReduce(Module):
 
             # based on parser state, get valid actions.
             # only a very small subset of actions are valid, as below.
-            valid_actions = self.action_helper.get_valid_actions(
+            valid_actions, mask = self.action_helper.get_valid_actions(
                 previous_action, self.left_candidates.is_empty(),
                 self.right_candidates.is_empty()
             )
@@ -419,17 +431,18 @@ class ShiftReduce(Module):
             hidden_representation = self.hidden_forward(state_embedding)
 
             # get action scores by hidden and ...
-            scores = self.action_generator(hidden_representation, distributions_head)
-            log_probabilities = -log_softmax(scores.squeeze(), dim=0)
+            scores = self.action_generator(hidden_representation, distributions_head).squeeze()
+            scores = scores + (mask - 1) * 128
+            log_probabilities = -log_softmax(scores, dim=0)
 
             if oracle_actions:
                 action = oracle_actions[step]
                 action_id = action.value
-                if action not in valid_actions:
-                    raise RuntimeError(f"Action {0} dose not in valid_actions, %s(pre) %s: [%s")
-                loss_action.append(log_probabilities[action_id].unsqueeze(0))  # TODO dy.pick
+                if self.training and action not in valid_actions:
+                    raise RuntimeError(f"Action {action} dose not in valid_actions {valid_actions}")
+                loss_action.append(log_probabilities[action_id].unsqueeze(0))
             if not self.training:
-                action_id = log_probabilities.argmax()[1].item()
+                action_id = scores.argmax().item()
                 action = Action(action_id)
                 actions.append(action)
 
@@ -519,7 +532,10 @@ class ShiftReduce(Module):
 
             head_index, head_embedding = self.current_head.index, self.current_head.embedding()
 
-            last_embedding, last_index = sigma_rnn.pop()  # TODO 万一空的
+            if sigma_rnn.is_empty():
+                last_embedding, last_index = head_embedding, head_index
+            else:
+                last_embedding, last_index = sigma_rnn.pop()  # TODO 万一空的
 
             label_scores = self.labeler(self.embeddings(action=False),
                                         distributions_role,

@@ -106,6 +106,8 @@ def main():
         vocab.token_to_index['words'] = tokenizer.vocab
         vocab.index_to_token['words'] = tokenizer.ids_to_tokens
 
+    # dataset.train.data = dataset.train.data[:128]
+
     for part in vars(dataset).values():
         for ins in part:
             for i in ins['relations']:

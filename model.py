@@ -88,7 +88,7 @@ class TransitionModel(Module):
                 output_dict['loss_action']).sum() + torch.cat(
                     output_dict['loss_label']).sum()
             if not self.training:
-                output_dict['metric'] = self.metric(output_dict('prediction'), relations)
+                output_dict['metric'] = self.metric(output_dict['prediction'], relations)
 
         return output_dict
 
